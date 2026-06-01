@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>实时人脸识别系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            text-align: center;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .video-wrapper {
+            position: relative;
+            display: inline-block;
+        }
+        video, canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        video {
+            position: relative;
+            z-index: 1;
+        }
+        canvas {
+            position: absolute;
+            z-index: 2;
+        }
+        .controls {
+            margin-top: 20px;
+        }
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 30px;
+            font-size: 16px;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        button:hover {
+            transform: scale(1.05);
+            background: #5a67d8;
+        }
+        .info {
+            margin-top: 20px;
+            padding: 10px;
+            background: #f0f0f0;
+            border-radius: 10px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>👤 实时人脸识别系统</h1>
+        <div class="video-wrapper">
+            <video id="video" width="720" height="560" autoplay muted playsinline></video>
+            <canvas id="canvas" width="720" height="560"></canvas>
+        </div>
+        <div class="controls">
+            <button id="startBtn">启动摄像头</button>
+        </div>
+        <div class="info" id="status">
+            请点击“启动摄像头”按钮开始人脸识别
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.15.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const statusDiv = document.getElementById('status');
+        const startBtn = document.getElementById('startBtn');
+
+        let isDetecting = false;
+
+        async function loadModels() {
+            statusDiv.innerText = '🔄 正在加载人脸识别模型，请稍候...';
+            try {
+                await faceapi.nets.tinyFaceDetector.loadFromUri('./weights');
+                await faceapi.nets.faceLandmark68Tiny.loadFromUri('./weights');
+                await faceapi.nets.faceRecognitionNet.loadFromUri('./weights');
+                await faceapi.nets.faceExpressionNet.loadFromUri('./weights');
+                statusDiv.innerText = '✅ 模型加载成功，点击启动即可开始识别！';
+                return true;
+            } catch (error) {
+                console.error('模型加载失败:', error);
+                statusDiv.innerText = '❌ 模型加载失败，请检查网络或模型文件路径是否正确。';
+                return false;
+            }
+        }
+
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+                video.addEventListener('play', () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    isDetecting = true;
+                    statusDiv.innerText = '🟢 正在实时检测中... (按 q 键暂停，按 r 键恢复)';
+                    detectFaces();
+                });
+            } catch (error) {
+                console.error('摄像头启动失败:', error);
+                statusDiv.innerText = '❌ 无法访问摄像头，请检查浏览器权限设置。';
+            }
+        }
+
+        async function detectFaces() {
+            if (!isDetecting) return;
+            try {
+                const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
+                    .withFaceLandmarks()
+                    .withFaceDescriptors()
+                    .withFaceExpressions();
+                const resizedDetections = faceapi.resizeResults(detections, { width: canvas.width, height: canvas.height });
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                if (resizedDetections.length > 0) {
+                    statusDiv.innerText = `✅ 检测到 ${resizedDetections.length} 张人脸 | 按 q 键暂停，按 r 键继续`;
+                    faceapi.draw.drawDetections(canvas, resizedDetections);
+                    faceapi.draw.drawFaceLandmarks(canvas, resizedDetections);
+                    resizedDetections.forEach(detection => {
+                        const box = detection.detection.box;
+                        const expressions = detection.expressions;
+                        const emotions = Object.entries(expressions)
+                            .filter(([_, val]) => val > 0.5)
+                            .map(([key]) => key);
+                        const emotionText = emotions.length > 0 ? `😊 ${emotions[0]}` : '😐 表情中性';
+                        ctx.font = "bold 18px 'PingFang SC', 'Microsoft YaHei'";
+                        ctx.fillStyle = '#00ff00';
+                        ctx.fillText(emotionText, box.x, box.y - 10);
+                    });
+                } else {
+                    statusDiv.innerText = '🤔 未检测到人脸 | 按 q 键暂停，按 r 键继续';
+                }
+                requestAnimationFrame(detectFaces);
+            } catch (error) {
+                console.error('人脸检测出错:', error);
+                requestAnimationFrame(detectFaces);
+            }
+        }
+
+        startBtn.addEventListener('click', async () => {
+            const modelsLoaded = await loadModels();
+            if (modelsLoaded) {
+                await startCamera();
+                startBtn.disabled = true;
+                startBtn.textContent = '⚡ 识别进行中';
+            }
+        });
+
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'q' || event.key === 'Q') {
+                isDetecting = false;
+                statusDiv.innerText = '⏸️ 识别已暂停，请按 r 键恢复';
+            } else if (event.key === 'r' || event.key === 'R') {
+                if (video.srcObject && !isDetecting) {
+                    isDetecting = true;
+                    statusDiv.innerText = '🟢 正在实时检测中...';
+                    detectFaces();
+                }
+            }
+        });
+    </script>
+</body>
+</html>
